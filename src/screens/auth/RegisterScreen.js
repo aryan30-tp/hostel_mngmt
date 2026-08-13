@@ -14,6 +14,8 @@ import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../../config/firebase';
 
+const BACKEND_URL = 'https://hostel-mngmt.onrender.com';
+
 export default function RegisterScreen({ navigation }) {
   // Core fields
   const [name, setName] = useState('');
@@ -29,7 +31,7 @@ export default function RegisterScreen({ navigation }) {
   // Student-specific fields
   const [roomNo, setRoomNo] = useState('');
   const [rollNo, setRollNo] = useState('');
-  const [course, setCourse] = useState('');           // NEW
+  const [course, setCourse] = useState('');          // NEW
   const [parentMobile, setParentMobile] = useState(''); // NEW
 
   const [errorMsg, setErrorMsg] = useState('');
@@ -59,6 +61,7 @@ export default function RegisterScreen({ navigation }) {
 
       // 2. Build the data payload based on role
       let userData = {
+        uid, // Required for MongoDB linking
         name,
         email: email.trim(),
         mobile,
@@ -67,7 +70,6 @@ export default function RegisterScreen({ navigation }) {
       };
 
       if (role === 'student') {
-        // Now saving all student details
         userData = { ...userData, hostelType, roomNo, rollNo, course, parentMobile };
       } else if (role === 'warden') {
         userData = { ...userData, hostelType };
@@ -75,8 +77,20 @@ export default function RegisterScreen({ navigation }) {
         userData = { ...userData, staffCategory };
       }
 
-      // 3. Save the profile data to the Firestore 'users' collection
+      // 3. Save the profile data to Firestore (Kept temporarily for AuthContext compatibility)
       await setDoc(doc(db, 'users', uid), userData);
+
+      // 4. SAVE TO MONGODB ATLAS
+      const mongoRes = await fetch(`${BACKEND_URL}/api/users`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(userData)
+      });
+
+      if (!mongoRes.ok) {
+        const errorText = await mongoRes.text();
+        throw new Error(`Failed to save to MongoDB: ${errorText}`);
+      }
 
       // AuthContext will automatically detect the login and route the user!
     } catch (error) {
