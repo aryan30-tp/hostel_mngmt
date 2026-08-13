@@ -1,9 +1,11 @@
 import React, { useContext, useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert } from 'react-native';
-import { collection, query, where, onSnapshot, doc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc } from 'firebase/firestore';
 import { signOut } from 'firebase/auth';
 import { auth, db } from '../../config/firebase';
 import { AuthContext } from '../../context/AuthContext';
+
+const BACKEND_URL = 'https://hostel-mngmt.onrender.com';
 
 export default function StudentDashboard({ navigation }) {
   const { userData } = useContext(AuthContext);
@@ -11,6 +13,7 @@ export default function StudentDashboard({ navigation }) {
   const [gatepasses, setGatepasses] = useState([]);
   const previousStatusesRef = useRef({});
 
+  // 1. Fetch Issues (Still on Firebase)
   useEffect(() => {
     if (!userData || !auth.currentUser?.uid) return;
 
@@ -29,26 +32,44 @@ export default function StudentDashboard({ navigation }) {
       });
     });
 
-    const gatepassQ = query(collection(db, 'gatepasses'), where('studentId', '==', auth.currentUser.uid));
-    const unsubscribeGatepass = onSnapshot(gatepassQ, (snapshot) => {
-      const gpData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      const visibleGatepasses = gpData.filter(gp => gp.status !== 'in' && gp.status !== 'expired');
-      setGatepasses(visibleGatepasses);
+    return () => unsubscribeIssues();
+  }, [userData]);
 
-      visibleGatepasses.forEach((gatepass) => {
-        const previousStatus = previousStatusesRef.current[gatepass.id];
-        if (previousStatus && previousStatus !== gatepass.status && ['approved', 'declined'].includes(gatepass.status)) {
-          Alert.alert('Gatepass update', `Your gatepass request was ${gatepass.status}.`);
+  // 2. Fetch Gatepasses (Migrated to MongoDB)
+  useEffect(() => {
+    const fetchGatepasses = async () => {
+      if (!auth.currentUser?.uid) return;
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/gatepasses/student/${auth.currentUser.uid}`);
+        if (res.ok) {
+          const data = await res.json();
+          const visibleGatepasses = data.filter(gp => gp.status !== 'in' && gp.status !== 'expired');
+          setGatepasses(visibleGatepasses);
+
+          // Alert logic for MongoDB gatepasses (uses _id instead of id)
+          visibleGatepasses.forEach((gatepass) => {
+            const previousStatus = previousStatusesRef.current[gatepass._id];
+            if (previousStatus && previousStatus !== gatepass.status && ['approved', 'declined'].includes(gatepass.status)) {
+              Alert.alert('Gatepass update', `Your gatepass request was ${gatepass.status}.`);
+            }
+            previousStatusesRef.current[gatepass._id] = gatepass.status;
+          });
         }
-        previousStatusesRef.current[gatepass.id] = gatepass.status;
-      });
+      } catch (error) {
+        console.error("Error fetching gatepasses:", error);
+      }
+    };
+
+    // Fetch instantly on load
+    fetchGatepasses();
+
+    // Auto-refresh when returning to this screen from the GatepassForm
+    const unsubscribeFocus = navigation.addListener('focus', () => {
+      fetchGatepasses();
     });
 
-    return () => {
-      unsubscribeIssues();
-      unsubscribeGatepass();
-    };
-  }, [userData]);
+    return unsubscribeFocus;
+  }, [navigation, userData]);
 
   const markIssueResolved = async (issueId) => {
     try {
@@ -67,8 +88,14 @@ export default function StudentDashboard({ navigation }) {
         style: 'destructive',
         onPress: async () => {
           try {
-            await deleteDoc(doc(db, 'gatepasses', gatepassId));
+            // Send DELETE request to MongoDB
+            const res = await fetch(`${BACKEND_URL}/api/gatepasses/${gatepassId}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('Failed to delete');
+            
             Alert.alert('Success', 'Gatepass deleted.');
+            
+            // Remove it from the screen immediately
+            setGatepasses(prev => prev.filter(gp => gp._id !== gatepassId));
           } catch (error) {
             Alert.alert('Error', 'Failed to delete gatepass.');
           }
@@ -102,20 +129,21 @@ export default function StudentDashboard({ navigation }) {
       <Text style={styles.sectionTitle}>Active Gatepasses</Text>
       <FlatList
         data={gatepasses}
-        keyExtractor={item => item.id}
+        keyExtractor={item => item._id} // MongoDB uses _id
         ListEmptyComponent={<Text style={styles.emptyText}>No active gatepasses.</Text>}
         renderItem={({ item }) => (
           <View style={styles.card}>
             <View style={styles.cardHeaderRow}>
               <Text style={styles.cardTitle}>To: {item.destination}</Text>
-              {/* Delete button only shown if the student hasn't left yet */}
+              
+              {/* Delete button (now using item._id) */}
               {['pending', 'approved', 'emergency'].includes(item.status) && (
-                <TouchableOpacity onPress={() => handleDeleteGatepass(item.id)}>
+                <TouchableOpacity onPress={() => handleDeleteGatepass(item._id)}>
                   <Text style={styles.deleteText}>Delete 🗑️</Text>
                 </TouchableOpacity>
               )}
             </View>
-            <Text>Status: <Text style={{ fontWeight: 'bold' }}>{item.status.toUpperCase()}</Text></Text>
+            <Text>Status: <Text style={{ fontWeight: 'bold', color: item.status === 'pending' ? '#e68a00' : '#333' }}>{item.status.toUpperCase()}</Text></Text>
             <Text style={styles.expectedText}>Out: {item.expectedOut} | In: {item.expectedIn}</Text>
             {item.status === 'approved' && (
               <Text style={styles.helperText}>Show this to the guard when leaving.</Text>

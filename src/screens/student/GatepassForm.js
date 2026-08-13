@@ -22,17 +22,15 @@ export default function GatepassForm({ navigation }) {
     parentMobile: userData?.parentMobile || '' 
   });
 
-  // --- NEW DATE/TIME STATE LOGIC ---
   const [dateState, setDateState] = useState({
     outTime: new Date(),
     inDate: new Date(),
     inTime: new Date()
   });
   const [showPicker, setShowPicker] = useState(false);
-  const [pickerMode, setPickerMode] = useState('date'); // 'date' or 'time'
-  const [activeField, setActiveField] = useState(null); // 'outTime', 'inDate', 'inTime'
+  const [pickerMode, setPickerMode] = useState('date'); 
+  const [activeField, setActiveField] = useState(null); 
 
-  // Computed Out Date (Uneditable: Today for normal/emergency, Tomorrow for pre-approval)
   const computedOutDate = new Date();
   if (passType === 'pre-approval') {
     computedOutDate.setDate(computedOutDate.getDate() + 1);
@@ -47,7 +45,7 @@ export default function GatepassForm({ navigation }) {
   };
 
   const handleDateConfirm = (event, selectedDate) => {
-    setShowPicker(Platform.OS === 'ios'); // iOS picker stays open inline usually, Android closes
+    setShowPicker(Platform.OS === 'ios'); 
     if (selectedDate) {
       setDateState(prev => ({ ...prev, [activeField]: selectedDate }));
     }
@@ -69,17 +67,23 @@ export default function GatepassForm({ navigation }) {
     try {
       const studentId = auth.currentUser.uid;
 
-      // 1. Fetch student's existing passes from MONGODB to check limits
+      // 1. Fetch student's existing passes from MONGODB
       const res = await fetch(`${BACKEND_URL}/api/gatepasses/student/${studentId}`);
-      if (!res.ok) throw new Error('Failed to connect to database');
+      if (!res.ok) {
+        const errorData = await res.text();
+        throw new Error(`Server said: ${res.status} - ${errorData}`);
+      }
+      
       const existingPasses = await res.json();
 
-      // Check for ACTIVE gatepass
-      const hasActive = existingPasses.some(p => ['pending', 'approved', 'out', 'emergency'].includes(p.status));
-      if (hasActive) {
-        Alert.alert('Request Denied', 'You already have an active gatepass.');
-        setLoading(false);
-        return;
+      // Check for ACTIVE gatepass (Emergency passes BYPASS this rule)
+      if (passType !== 'emergency') {
+        const hasActive = existingPasses.some(p => ['pending', 'approved', 'out', 'emergency'].includes(p.status));
+        if (hasActive) {
+          Alert.alert('Request Denied', 'You already have an active gatepass. You cannot request another normal pass right now.');
+          setLoading(false);
+          return;
+        }
       }
 
       // Check for 2 DECLINES today
@@ -97,9 +101,18 @@ export default function GatepassForm({ navigation }) {
         return;
       }
 
-      // 2. Format exact strings for the database
-      const expectedOutStr = `${formatDate(computedOutDate)} - ${formatTime(dateState.outTime)}`;
-      const expectedInStr = `${formatDate(dateState.inDate)} - ${formatTime(dateState.inTime)}`;
+      // 2. Format exact strings for the database (Handle Emergency Defaults)
+      let expectedOutStr;
+      let expectedInStr;
+
+      if (passType === 'emergency') {
+        const exactCurrentTime = new Date(); 
+        expectedOutStr = `${formatDate(exactCurrentTime)} - ${formatTime(exactCurrentTime)}`;
+        expectedInStr = 'TBD (Emergency)'; 
+      } else {
+        expectedOutStr = `${formatDate(computedOutDate)} - ${formatTime(dateState.outTime)}`;
+        expectedInStr = `${formatDate(dateState.inDate)} - ${formatTime(dateState.inTime)}`;
+      }
 
       // 3. Submit to MONGODB
       const submitRes = await fetch(`${BACKEND_URL}/api/gatepasses`, {
@@ -117,7 +130,10 @@ export default function GatepassForm({ navigation }) {
         })
       });
 
-      if (!submitRes.ok) throw new Error('Failed to save gatepass');
+      if (!submitRes.ok) {
+        const errorData = await submitRes.text();
+        throw new Error(`Failed to save: ${submitRes.status} - ${errorData}`);
+      }
 
       Alert.alert('Success', 'Gatepass requested successfully');
       navigation.goBack();
@@ -157,7 +173,6 @@ export default function GatepassForm({ navigation }) {
         <Text style={styles.helperTextEmergency}>* No warden approval needed. Alerts sent immediately.</Text>
       )}
 
-      {/* --- STRUCTURED DATE & TIME PICKERS --- */}
       <View style={styles.dateTimeCard}>
         <Text style={styles.dateTimeHeader}>Departure Details</Text>
         
@@ -167,26 +182,33 @@ export default function GatepassForm({ navigation }) {
         </View>
 
         <Text style={styles.label}>Expected Out Time</Text>
-        <TouchableOpacity style={styles.pickerBtn} onPress={() => openPicker('outTime', 'time')}>
-          <Text style={styles.pickerBtnText}>🕒 {formatTime(dateState.outTime)}</Text>
-        </TouchableOpacity>
+        {passType === 'emergency' ? (
+          <View style={styles.disabledBox}>
+            <Text style={styles.disabledText}>🕒 {formatTime(new Date())} (Auto-filled)</Text>
+          </View>
+        ) : (
+          <TouchableOpacity style={styles.pickerBtn} onPress={() => openPicker('outTime', 'time')}>
+            <Text style={styles.pickerBtnText}>🕒 {formatTime(dateState.outTime)}</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
-      <View style={styles.dateTimeCard}>
-        <Text style={styles.dateTimeHeader}>Return Details</Text>
+      {passType !== 'emergency' && (
+        <View style={styles.dateTimeCard}>
+          <Text style={styles.dateTimeHeader}>Return Details</Text>
 
-        <Text style={styles.label}>Expected Return Date</Text>
-        <TouchableOpacity style={styles.pickerBtn} onPress={() => openPicker('inDate', 'date')}>
-          <Text style={styles.pickerBtnText}>📅 {formatDate(dateState.inDate)}</Text>
-        </TouchableOpacity>
+          <Text style={styles.label}>Expected Return Date</Text>
+          <TouchableOpacity style={styles.pickerBtn} onPress={() => openPicker('inDate', 'date')}>
+            <Text style={styles.pickerBtnText}>📅 {formatDate(dateState.inDate)}</Text>
+          </TouchableOpacity>
 
-        <Text style={styles.label}>Expected Return Time</Text>
-        <TouchableOpacity style={styles.pickerBtn} onPress={() => openPicker('inTime', 'time')}>
-          <Text style={styles.pickerBtnText}>🕒 {formatTime(dateState.inTime)}</Text>
-        </TouchableOpacity>
-      </View>
+          <Text style={styles.label}>Expected Return Time</Text>
+          <TouchableOpacity style={styles.pickerBtn} onPress={() => openPicker('inTime', 'time')}>
+            <Text style={styles.pickerBtnText}>🕒 {formatTime(dateState.inTime)}</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
-      {/* Renders the actual native pop-up when state is true */}
       {showPicker && (
         <DateTimePicker
           value={dateState[activeField]}
@@ -194,11 +216,10 @@ export default function GatepassForm({ navigation }) {
           is24Hour={false}
           display="default"
           onChange={handleDateConfirm}
-          minimumDate={computedOutDate} // Prevents picking a return date in the past
+          minimumDate={computedOutDate} 
         />
       )}
 
-      {/* --- STANDARD TEXT INPUTS --- */}
       <Text style={styles.sectionDivider}>Additional Details</Text>
       {['name', 'rollNo', 'roomNo', 'mobile', 'course', 'destination', 'reason', 'parentMobile'].map((field) => (
         <TextInput

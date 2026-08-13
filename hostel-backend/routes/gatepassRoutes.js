@@ -13,6 +13,16 @@ router.post('/', async (req, res) => {
   }
 });
 
+// GET ALL gatepasses (Added this so Warden dashboard can fetch everything)
+router.get('/', async (req, res) => {
+  try {
+    const gatepasses = await Gatepass.find().sort({ createdAt: -1 });
+    res.status(200).json(gatepasses);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // GET passes by studentId (For Student Dashboard)
 router.get('/student/:studentId', async (req, res) => {
   try {
@@ -40,12 +50,25 @@ router.get('/filter', async (req, res) => {
   }
 });
 
-// UPDATE pass status (For Warden Approve/Decline or Security Mark Out/In)
+// UPDATE pass status (Supports both PUT and PATCH methods)
 router.put('/:id', async (req, res) => {
   try {
     const updatedPass = await Gatepass.findByIdAndUpdate(
       req.params.id, 
       { $set: req.body }, 
+      { new: true }
+    );
+    res.status(200).json(updatedPass);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.patch('/:id/status', async (req, res) => {
+  try {
+    const updatedPass = await Gatepass.findByIdAndUpdate(
+      req.params.id, 
+      { $set: { status: req.body.status } }, 
       { new: true }
     );
     res.status(200).json(updatedPass);
