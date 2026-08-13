@@ -1,23 +1,21 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, TextInput } from 'react-native';
-import { collection, query, where, onSnapshot, doc, updateDoc } from 'firebase/firestore';
-import { db } from '../../config/firebase';
+import React, { useEffect, useState, useCallback } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, TextInput, ActivityIndicator } from 'react-native';
+import { io } from 'socket.io-client';
+
+const BACKEND_URL = 'https://hostel-mngmt.onrender.com';
 
 export default function SecurityView({ userData }) {
   const [activeTab, setActiveTab] = useState('active'); 
   const [register, setRegister] = useState({ approved: [], out: [], history: [] });
-  const [searchQuery, setSearchQuery] = useState(''); // NEW
+  const [searchQuery, setSearchQuery] = useState('');
+  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    if (!userData) return;
-
-    const q = query(
-      collection(db, 'gatepasses'),
-      where('status', 'in', ['approved', 'out', 'in', 'emergency']) // Added emergency so security sees them
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const allData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  const fetchGatepasses = useCallback(async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/gatepasses`);
+      if (!res.ok) throw new Error('Failed to fetch gatepasses');
+      const allData = await res.json();
+      
       const today = new Date().toDateString();
       
       const approved = [];
@@ -28,8 +26,7 @@ export default function SecurityView({ userData }) {
         if (item.status === 'out') {
           out.push(item);
         } else if (item.status === 'approved' || item.status === 'emergency') {
-          // Security should see emergencies instantly, and normal approved passes for today
-          const passDate = item.date?.toDate().toDateString();
+          const passDate = new Date(item.targetDate || item.createdAt).toDateString();
           if (passDate === today || item.status === 'emergency') {
             approved.push(item);
           }
@@ -41,17 +38,46 @@ export default function SecurityView({ userData }) {
       history.sort((a, b) => (b.inTime || 0) - (a.inTime || 0));
 
       setRegister({ approved, out, history });
+    } catch (error) {
+      console.error("Error loading security gatepasses:", error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!userData) return;
+    
+    // Initial fetch on screen load
+    fetchGatepasses();
+
+    // 1. Open WebSockets Connection
+    const socket = io(BACKEND_URL);
+
+    // 2. Listen for the backend signal
+    socket.on('gatepassUpdate', () => {
+      console.log('Real-time update received! Refreshing list...');
+      fetchGatepasses();
     });
 
-    return () => unsubscribe();
-  }, [userData]);
+    // 3. Clean up the connection when the screen is closed to save battery
+    return () => {
+      socket.disconnect();
+    };
+  }, [userData, fetchGatepasses]);
 
   const markOut = async (id) => {
     try {
-      await updateDoc(doc(db, 'gatepasses', id), { 
-        status: 'out',
-        outTime: Date.now() 
+      const res = await fetch(`${BACKEND_URL}/api/gatepasses/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          status: 'out',
+          outTime: Date.now() 
+        })
       });
+      if (!res.ok) throw new Error('Failed to update server');
+      // No need to call fetchGatepasses() here—the Socket will handle it instantly!
     } catch (error) {
       Alert.alert('Error', 'Failed to mark out.');
     }
@@ -70,11 +96,16 @@ export default function SecurityView({ userData }) {
         durationStr = `${hours}h ${mins}m`;
       }
 
-      await updateDoc(doc(db, 'gatepasses', item.id), { 
-        status: 'in', 
-        inTime: inTime,
-        duration: durationStr 
+      const res = await fetch(`${BACKEND_URL}/api/gatepasses/${item._id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          status: 'in', 
+          inTime: inTime,
+          duration: durationStr 
+        })
       });
+      if (!res.ok) throw new Error('Failed to update server');
     } catch (error) {
       Alert.alert('Error', 'Failed to mark in.');
     }
@@ -90,7 +121,6 @@ export default function SecurityView({ userData }) {
     return new Date(timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   };
 
-  // NEW: Filter functions for the search bar
   const filterByRollNo = (list) => {
     if (!searchQuery) return list;
     return list.filter(item => item.rollNo?.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -111,7 +141,7 @@ export default function SecurityView({ userData }) {
       )}
       
       {['approved', 'emergency'].includes(item.status) ? (
-        <TouchableOpacity style={[styles.btn, styles.outBtn]} onPress={() => markOut(item.id)}>
+        <TouchableOpacity style={[styles.btn, styles.outBtn]} onPress={() => markOut(item._id)}>
           <Text style={styles.btnText}>MARK OUT</Text>
         </TouchableOpacity>
       ) : (
@@ -138,9 +168,16 @@ export default function SecurityView({ userData }) {
     </View>
   );
 
+  if (loading) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#007bff" />
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
-      {/* NEW: Search Bar */}
       <TextInput
         style={styles.searchInput}
         placeholder="Search by Roll Number..."
@@ -169,31 +206,33 @@ export default function SecurityView({ userData }) {
           <Text style={styles.sectionTitle}>Currently Outside ({filterByRollNo(register.out).length})</Text>
           <FlatList
             data={filterByRollNo(register.out)}
-            keyExtractor={item => item.id}
+            keyExtractor={item => item._id}
             renderItem={renderActiveItem}
             ListEmptyComponent={<Text style={styles.emptyText}>No students currently out.</Text>}
             style={styles.list}
+            showsVerticalScrollIndicator={false}
           />
 
           <Text style={styles.sectionTitle}>Ready to Leave ({filterByRollNo(register.approved).length})</Text>
           <FlatList
             data={filterByRollNo(register.approved)}
-            keyExtractor={item => item.id}
+            keyExtractor={item => item._id}
             renderItem={renderActiveItem}
             ListEmptyComponent={<Text style={styles.emptyText}>No approved passes matching search.</Text>}
             style={styles.list}
+            showsVerticalScrollIndicator={false}
           />
         </View>
       ) : (
         <View style={{ flex: 1 }}>
-          {/* NEW: .slice(0, 20) ensures only the latest 20 show up */}
           <Text style={styles.sectionTitle}>Completed Passes (Latest 20)</Text>
           <FlatList
             data={filterByRollNo(register.history).slice(0, 20)}
-            keyExtractor={item => item.id}
+            keyExtractor={item => item._id}
             renderItem={renderHistoryItem}
             ListEmptyComponent={<Text style={styles.emptyText}>No history recorded yet.</Text>}
             style={styles.list}
+            showsVerticalScrollIndicator={false}
           />
         </View>
       )}
@@ -203,19 +242,15 @@ export default function SecurityView({ userData }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f4f6f9', padding: 10 },
-  
   searchInput: { backgroundColor: '#fff', padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#ddd', marginBottom: 15, fontSize: 16 },
-
   tabContainer: { flexDirection: 'row', backgroundColor: '#e9ecef', borderRadius: 8, padding: 4, marginBottom: 15 },
   tab: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 6 },
   activeTab: { backgroundColor: '#fff', elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2 },
   tabText: { fontSize: 15, fontWeight: 'bold', color: '#6c757d' },
   activeTabText: { color: '#007bff' },
-
   sectionTitle: { fontSize: 18, fontWeight: 'bold', color: '#333', marginBottom: 10, marginTop: 5 },
   list: { flex: 1 },
   emptyText: { fontStyle: 'italic', color: '#666', marginBottom: 15, textAlign: 'center' },
-  
   card: { backgroundColor: '#fff', padding: 15, borderRadius: 8, marginBottom: 10, elevation: 2, borderLeftWidth: 4, borderLeftColor: '#343a40' },
   cardOut: { borderLeftColor: '#fd7e14' }, 
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 },
@@ -224,13 +259,11 @@ const styles = StyleSheet.create({
   detail: { fontSize: 14, color: '#555', marginBottom: 4 },
   expectedText: { fontSize: 12, color: '#17a2b8', fontStyle: 'italic', marginBottom: 4 },
   timeTracker: { fontSize: 14, fontWeight: 'bold', color: '#fd7e14', marginVertical: 5 },
-  
   durationBadge: { backgroundColor: '#e9ecef', paddingVertical: 4, paddingHorizontal: 10, borderRadius: 20 },
   durationText: { fontSize: 12, fontWeight: 'bold', color: '#495057' },
   timeBox: { backgroundColor: '#f8f9fa', padding: 10, borderRadius: 8, marginTop: 10 },
   timeLabel: { fontSize: 13, color: '#666', marginBottom: 4 },
   timeValue: { color: '#333', fontWeight: 'bold' },
-
   btn: { paddingVertical: 10, borderRadius: 5, alignItems: 'center', marginTop: 10 },
   outBtn: { backgroundColor: '#ff9800' },
   inBtn: { backgroundColor: '#28a745' },

@@ -1,41 +1,74 @@
-import React, { useEffect, useState, useContext } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Linking } from 'react-native';
-import { collection, query, where, onSnapshot, doc, updateDoc } from 'firebase/firestore';
-import { db } from '../../config/firebase';
+import React, { useEffect, useState, useContext, useCallback } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Linking, ActivityIndicator } from 'react-native';
 import { AuthContext } from '../../context/AuthContext';
 
-export default function GatepassRequests() {
+const BACKEND_URL = 'https://hostel-mngmt.onrender.com';
+
+export default function GatepassRequests({ navigation }) {
   const { userData } = useContext(AuthContext);
   const [requests, setRequests] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const fetchRequests = useCallback(async () => {
     if (!userData || !userData.hostelType) return;
 
-    // Fetch BOTH pending requests and emergencies
-    const q = query(
-      collection(db, 'gatepasses'),
-      where('hostelType', '==', userData.hostelType),
-      where('status', 'in', ['pending', 'emergency'])
-    );
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/gatepasses`);
+      if (!res.ok) throw new Error('Failed to fetch gatepasses');
+      const data = await res.json();
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      
-      // Sort so emergencies are at the very top, then by date
-      data.sort((a, b) => {
+      // Filter: Match Warden's Hostel AND status must be 'pending' or 'emergency'
+      const filtered = data.filter(gp => 
+        gp.hostelType === userData.hostelType && 
+        ['pending', 'emergency'].includes(gp.status)
+      );
+
+      // Sort: Emergencies at the very top, then oldest requests first
+      filtered.sort((a, b) => {
         if (a.status === 'emergency' && b.status !== 'emergency') return -1;
         if (b.status === 'emergency' && a.status !== 'emergency') return 1;
-        return (a.date?.toMillis() || 0) - (b.date?.toMillis() || 0);
+        
+        const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return timeA - timeB;
       });
-      setRequests(data);
-    });
 
-    return () => unsubscribe();
+      setRequests(filtered);
+    } catch (error) {
+      console.error("Error loading requests:", error);
+    } finally {
+      setLoading(false);
+    }
   }, [userData]);
+
+  useEffect(() => {
+    fetchRequests();
+
+    // Auto-refresh when navigating to this screen (if using a tab/stack navigator)
+    let unsubscribeFocus;
+    if (navigation) {
+      unsubscribeFocus = navigation.addListener('focus', () => {
+        fetchRequests();
+      });
+    }
+
+    return () => {
+      if (unsubscribeFocus) unsubscribeFocus();
+    };
+  }, [fetchRequests, navigation]);
 
   const updateStatus = async (id, newStatus) => {
     try {
-      await updateDoc(doc(db, 'gatepasses', id), { status: newStatus });
+      const res = await fetch(`${BACKEND_URL}/api/gatepasses/${id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus })
+      });
+
+      if (!res.ok) throw new Error('Failed to update status on server');
+      
+      // Refresh the list locally right after a successful update
+      fetchRequests();
     } catch (error) {
       Alert.alert('Error', 'Failed to update gatepass status.');
     }
@@ -71,6 +104,11 @@ export default function GatepassRequests() {
         <Text style={styles.detailText}><Text style={styles.bold}>Going to:</Text> {item.destination}</Text>
         <Text style={styles.detailText}><Text style={styles.bold}>Reason:</Text> {item.reason}</Text>
         
+        <View style={styles.timeBox}>
+          <Text style={styles.timeText}><Text style={styles.bold}>Out:</Text> {item.expectedOut}</Text>
+          <Text style={styles.timeText}><Text style={styles.bold}>In:</Text> {item.expectedIn}</Text>
+        </View>
+        
         <View style={styles.contactContainer}>
           <View style={styles.contactRow}>
             <Text style={styles.detailText}><Text style={styles.bold}>Student:</Text> {item.mobile}</Text>
@@ -90,7 +128,7 @@ export default function GatepassRequests() {
           {isEmergency ? (
             <TouchableOpacity 
               style={[styles.btn, styles.acknowledgeBtn]} 
-              onPress={() => updateStatus(item.id, 'approved')}
+              onPress={() => updateStatus(item._id, 'approved')} // Updated to use MongoDB's _id
             >
               <Text style={styles.btnText}>Acknowledge Emergency</Text>
             </TouchableOpacity>
@@ -98,14 +136,14 @@ export default function GatepassRequests() {
             <>
               <TouchableOpacity 
                 style={[styles.btn, styles.declineBtn]} 
-                onPress={() => updateStatus(item.id, 'declined')}
+                onPress={() => updateStatus(item._id, 'declined')} // Updated to use MongoDB's _id
               >
                 <Text style={styles.btnText}>Decline</Text>
               </TouchableOpacity>
               
               <TouchableOpacity 
                 style={[styles.btn, styles.approveBtn]} 
-                onPress={() => updateStatus(item.id, 'approved')}
+                onPress={() => updateStatus(item._id, 'approved')} // Updated to use MongoDB's _id
               >
                 <Text style={styles.btnText}>Approve</Text>
               </TouchableOpacity>
@@ -116,15 +154,24 @@ export default function GatepassRequests() {
     );
   };
 
+  if (loading) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#007bff" />
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Pending & Alerts ({requests.length})</Text>
       <FlatList
         data={requests}
-        keyExtractor={item => item.id}
+        keyExtractor={item => item._id} // Updated to use MongoDB's _id
         renderItem={renderItem}
         ListEmptyComponent={<Text style={styles.emptyText}>No pending gatepass requests.</Text>}
         contentContainerStyle={styles.listContent}
+        showsVerticalScrollIndicator={false}
       />
     </View>
   );
@@ -145,6 +192,8 @@ const styles = StyleSheet.create({
   detailsRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 },
   detailText: { fontSize: 14, color: '#444', marginBottom: 5 },
   bold: { fontWeight: 'bold', color: '#333' },
+  timeBox: { backgroundColor: '#f8f9fa', padding: 8, borderRadius: 6, marginVertical: 8, borderWidth: 1, borderColor: '#eee' },
+  timeText: { fontSize: 13, color: '#555', marginBottom: 2 },
   contactContainer: { marginTop: 10, padding: 10, backgroundColor: '#f8f9fa', borderRadius: 8 },
   contactRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 },
   callBtn: { backgroundColor: '#6c757d', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6 },
