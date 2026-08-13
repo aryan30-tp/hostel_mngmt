@@ -29,6 +29,8 @@ export default function RegisterScreen({ navigation }) {
   // Student-specific fields
   const [roomNo, setRoomNo] = useState('');
   const [rollNo, setRollNo] = useState('');
+  const [course, setCourse] = useState('');           // NEW
+  const [parentMobile, setParentMobile] = useState(''); // NEW
 
   const [errorMsg, setErrorMsg] = useState('');
   const [loading, setLoading] = useState(false);
@@ -41,8 +43,9 @@ export default function RegisterScreen({ navigation }) {
       setErrorMsg('Please fill in all core details.');
       return;
     }
-    if (role === 'student' && (!roomNo || !rollNo)) {
-      setErrorMsg('Students must provide a Room Number and Roll Number.');
+    // Updated student validation
+    if (role === 'student' && (!roomNo || !rollNo || !course || !parentMobile)) {
+      setErrorMsg('Students must provide Room No, Roll No, Course, and Parent Mobile.');
       return;
     }
 
@@ -64,7 +67,8 @@ export default function RegisterScreen({ navigation }) {
       };
 
       if (role === 'student') {
-        userData = { ...userData, hostelType, roomNo, rollNo };
+        // Now saving all student details
+        userData = { ...userData, hostelType, roomNo, rollNo, course, parentMobile };
       } else if (role === 'warden') {
         userData = { ...userData, hostelType };
       } else if (role === 'staff') {
@@ -173,10 +177,16 @@ export default function RegisterScreen({ navigation }) {
 
         {/* --- STUDENT ONLY DETAILS --- */}
         {role === 'student' && (
-          <View style={styles.rowContainer}>
-            <TextInput style={[styles.input, styles.halfInput]} placeholder="Room No." placeholderTextColor="#999" value={roomNo} onChangeText={setRoomNo} />
-            <TextInput style={[styles.input, styles.halfInput]} placeholder="Roll No." placeholderTextColor="#999" value={rollNo} onChangeText={setRollNo} />
-          </View>
+          <>
+            <View style={styles.rowContainer}>
+              <TextInput style={[styles.input, styles.halfInput]} placeholder="Room No." placeholderTextColor="#999" value={roomNo} onChangeText={setRoomNo} />
+              <TextInput style={[styles.input, styles.halfInput]} placeholder="Roll No." placeholderTextColor="#999" value={rollNo} onChangeText={setRollNo} />
+            </View>
+            <View style={styles.rowContainer}>
+              <TextInput style={[styles.input, styles.halfInput]} placeholder="Course" placeholderTextColor="#999" value={course} onChangeText={setCourse} />
+              <TextInput style={[styles.input, styles.halfInput]} placeholder="Parent Mobile" placeholderTextColor="#999" value={parentMobile} onChangeText={setParentMobile} keyboardType="phone-pad" />
+            </View>
+          </>
         )}
 
         <TouchableOpacity style={styles.button} onPress={handleRegister} disabled={loading}>
@@ -195,150 +205,29 @@ export default function RegisterScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f4f6f9',
-  },
-  scrollContent: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    padding: 20,
-    paddingTop: 50,
-    paddingBottom: 40,
-  },
-  headerContainer: {
-    marginBottom: 20,
-    alignItems: 'center',
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#1a1a1a',
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#666',
-  },
-  errorContainer: {
-    backgroundColor: '#ffe5e5',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 20,
-    borderLeftWidth: 4,
-    borderLeftColor: '#ff4c4c',
-  },
-  errorText: {
-    color: '#d32f2f',
-    fontSize: 14,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  sectionLabel: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#333',
-    marginBottom: 10,
-    marginTop: 10,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  toggleContainer: {
-    flexDirection: 'row',
-    backgroundColor: '#e9ecef',
-    borderRadius: 12,
-    padding: 4,
-    marginBottom: 20,
-  },
-  toggleButton: {
-    flex: 1,
-    paddingVertical: 12,
-    alignItems: 'center',
-    borderRadius: 8,
-  },
-  toggleButtonActive: {
-    backgroundColor: '#007bff',
-    shadowColor: '#007bff',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  toggleText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#6c757d',
-  },
-  toggleTextActive: {
-    color: '#ffffff',
-  },
-  gridContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 20,
-  },
-  gridButton: {
-    backgroundColor: '#e9ecef',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 20,
-  },
-  gridText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#6c757d',
-  },
-  inputContainer: {
-    marginTop: 10,
-  },
-  input: {
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#e9ecef',
-    padding: 16,
-    borderRadius: 12,
-    fontSize: 16,
-    color: '#333',
-    marginBottom: 12,
-  },
-  rowContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  halfInput: {
-    width: '48%',
-  },
-  button: {
-    backgroundColor: '#007bff',
-    padding: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 20,
-    shadowColor: '#007bff',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  buttonText: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: 'bold',
-    letterSpacing: 1,
-  },
-  footer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    marginTop: 25,
-  },
-  footerText: {
-    color: '#666',
-    fontSize: 15,
-  },
-  linkText: {
-    color: '#007bff',
-    fontSize: 15,
-    fontWeight: 'bold',
-  },
+  container: { flex: 1, backgroundColor: '#f4f6f9' },
+  scrollContent: { flexGrow: 1, justifyContent: 'center', padding: 20, paddingTop: 50, paddingBottom: 40 },
+  headerContainer: { marginBottom: 20, alignItems: 'center' },
+  title: { fontSize: 28, fontWeight: '800', color: '#1a1a1a', marginBottom: 8 },
+  subtitle: { fontSize: 16, color: '#666' },
+  errorContainer: { backgroundColor: '#ffe5e5', padding: 12, borderRadius: 8, marginBottom: 20, borderLeftWidth: 4, borderLeftColor: '#ff4c4c' },
+  errorText: { color: '#d32f2f', fontSize: 14, fontWeight: '600', textAlign: 'center' },
+  sectionLabel: { fontSize: 14, fontWeight: '700', color: '#333', marginBottom: 10, marginTop: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
+  toggleContainer: { flexDirection: 'row', backgroundColor: '#e9ecef', borderRadius: 12, padding: 4, marginBottom: 20 },
+  toggleButton: { flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: 8 },
+  toggleButtonActive: { backgroundColor: '#007bff', shadowColor: '#007bff', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 2 },
+  toggleText: { fontSize: 14, fontWeight: '600', color: '#6c757d' },
+  toggleTextActive: { color: '#ffffff' },
+  gridContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20 },
+  gridButton: { backgroundColor: '#e9ecef', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 20 },
+  gridText: { fontSize: 14, fontWeight: '500', color: '#6c757d' },
+  inputContainer: { marginTop: 10 },
+  input: { backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e9ecef', padding: 16, borderRadius: 12, fontSize: 16, color: '#333', marginBottom: 12 },
+  rowContainer: { flexDirection: 'row', justifyContent: 'space-between' },
+  halfInput: { width: '48%' },
+  button: { backgroundColor: '#007bff', padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 20, shadowColor: '#007bff', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 },
+  buttonText: { color: '#ffffff', fontSize: 18, fontWeight: 'bold', letterSpacing: 1 },
+  footer: { flexDirection: 'row', justifyContent: 'center', marginTop: 25 },
+  footerText: { color: '#666', fontSize: 15 },
+  linkText: { color: '#007bff', fontSize: 15, fontWeight: 'bold' },
 });

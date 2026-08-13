@@ -13,12 +13,12 @@ export default function GatepassForm({ navigation }) {
     rollNo: userData?.rollNo || '',
     roomNo: userData?.roomNo || '', 
     mobile: userData?.mobile || '',
-    course: '',
+    course: userData?.course || '',         // AUTOMATICALLY FILLED
     destination: '',
     reason: '',
-    parentMobile: '',
-    expectedOut: '', // NEW
-    expectedIn: ''   // NEW
+    parentMobile: userData?.parentMobile || '', // AUTOMATICALLY FILLED
+    expectedOut: '', 
+    expectedIn: ''   
   });
 
   const handleChange = (name, value) => setForm({ ...form, [name]: value });
