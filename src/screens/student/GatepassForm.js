@@ -1,31 +1,67 @@
 import React, { useState, useContext } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Alert, ActivityIndicator } from 'react-native';
-import { collection, addDoc, serverTimestamp, getDocs, query, where } from 'firebase/firestore';
-import { auth, db } from '../../config/firebase';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Alert, ActivityIndicator, Platform } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { auth } from '../../config/firebase';
 import { AuthContext } from '../../context/AuthContext';
+
+const BACKEND_URL = 'https://hostel-mngmt.onrender.com';
 
 export default function GatepassForm({ navigation }) {
   const { userData } = useContext(AuthContext);
   const [loading, setLoading] = useState(false);
   const [passType, setPassType] = useState('normal'); 
+  
   const [form, setForm] = useState({
     name: userData?.name || '',
     rollNo: userData?.rollNo || '',
     roomNo: userData?.roomNo || '', 
     mobile: userData?.mobile || '',
-    course: userData?.course || '',         // AUTOMATICALLY FILLED
+    course: userData?.course || '',         
     destination: '',
     reason: '',
-    parentMobile: userData?.parentMobile || '', // AUTOMATICALLY FILLED
-    expectedOut: '', 
-    expectedIn: ''   
+    parentMobile: userData?.parentMobile || '' 
   });
+
+  // --- NEW DATE/TIME STATE LOGIC ---
+  const [dateState, setDateState] = useState({
+    outTime: new Date(),
+    inDate: new Date(),
+    inTime: new Date()
+  });
+  const [showPicker, setShowPicker] = useState(false);
+  const [pickerMode, setPickerMode] = useState('date'); // 'date' or 'time'
+  const [activeField, setActiveField] = useState(null); // 'outTime', 'inDate', 'inTime'
+
+  // Computed Out Date (Uneditable: Today for normal/emergency, Tomorrow for pre-approval)
+  const computedOutDate = new Date();
+  if (passType === 'pre-approval') {
+    computedOutDate.setDate(computedOutDate.getDate() + 1);
+  }
 
   const handleChange = (name, value) => setForm({ ...form, [name]: value });
 
+  const openPicker = (field, mode) => {
+    setActiveField(field);
+    setPickerMode(mode);
+    setShowPicker(true);
+  };
+
+  const handleDateConfirm = (event, selectedDate) => {
+    setShowPicker(Platform.OS === 'ios'); // iOS picker stays open inline usually, Android closes
+    if (selectedDate) {
+      setDateState(prev => ({ ...prev, [activeField]: selectedDate }));
+    }
+    if (event.type === 'set' || event.type === 'dismissed') {
+      setShowPicker(false);
+    }
+  };
+
+  const formatDate = (date) => date.toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric' });
+  const formatTime = (date) => date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
   const submitGatepass = async () => {
-    if (!form.name || !form.rollNo || !form.destination || !form.reason || !form.parentMobile || !form.expectedOut || !form.expectedIn) {
-      Alert.alert('Error', 'Please fill all required fields, including expected dates/times.');
+    if (!form.name || !form.rollNo || !form.destination || !form.reason || !form.parentMobile) {
+      Alert.alert('Error', 'Please fill all required text fields.');
       return;
     }
 
@@ -33,56 +69,55 @@ export default function GatepassForm({ navigation }) {
     try {
       const studentId = auth.currentUser.uid;
 
-      // 1. Check if the student already has an ACTIVE gatepass
-      const activeQuery = query(
-        collection(db, 'gatepasses'), 
-        where('studentId', '==', studentId),
-        where('status', 'in', ['pending', 'approved', 'out', 'emergency'])
-      );
-      const activeDocs = await getDocs(activeQuery);
-      if (!activeDocs.empty) {
-        Alert.alert('Request Denied', 'You already have an active gatepass. You cannot request another until it is completed or deleted.');
+      // 1. Fetch student's existing passes from MONGODB to check limits
+      const res = await fetch(`${BACKEND_URL}/api/gatepasses/student/${studentId}`);
+      if (!res.ok) throw new Error('Failed to connect to database');
+      const existingPasses = await res.json();
+
+      // Check for ACTIVE gatepass
+      const hasActive = existingPasses.some(p => ['pending', 'approved', 'out', 'emergency'].includes(p.status));
+      if (hasActive) {
+        Alert.alert('Request Denied', 'You already have an active gatepass.');
         setLoading(false);
         return;
       }
 
-      // 2. Check if the student has been declined TWICE today
-      const declinedQuery = query(
-        collection(db, 'gatepasses'),
-        where('studentId', '==', studentId),
-        where('status', '==', 'declined')
-      );
-      const declinedDocs = await getDocs(declinedQuery);
-      
+      // Check for 2 DECLINES today
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
       
-      const declinedToday = declinedDocs.docs.filter(d => {
-        const docDate = d.data().date?.toDate();
-        return docDate >= todayStart;
+      const declinesToday = existingPasses.filter(p => {
+        const passDate = new Date(p.createdAt);
+        return p.status === 'declined' && passDate >= todayStart;
       });
 
-      if (declinedToday.length >= 2) {
+      if (declinesToday.length >= 2) {
         Alert.alert('Request Denied', 'Your gatepass requests have been declined twice today. Please try again tomorrow.');
         setLoading(false);
         return;
       }
 
-      // 3. Submit the Gatepass
-      const targetDate = new Date();
-      if (passType === 'pre-approval') {
-        targetDate.setDate(targetDate.getDate() + 1); 
-      }
+      // 2. Format exact strings for the database
+      const expectedOutStr = `${formatDate(computedOutDate)} - ${formatTime(dateState.outTime)}`;
+      const expectedInStr = `${formatDate(dateState.inDate)} - ${formatTime(dateState.inTime)}`;
 
-      await addDoc(collection(db, 'gatepasses'), {
-        ...form,
-        studentId: studentId,
-        hostelType: userData.hostelType,
-        type: passType, 
-        targetDate: targetDate.toISOString(), 
-        status: passType === 'emergency' ? 'emergency' : 'pending', 
-        date: serverTimestamp()
+      // 3. Submit to MONGODB
+      const submitRes = await fetch(`${BACKEND_URL}/api/gatepasses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...form,
+          studentId: studentId,
+          hostelType: userData.hostelType,
+          type: passType,
+          targetDate: computedOutDate.toISOString(),
+          status: passType === 'emergency' ? 'emergency' : 'pending',
+          expectedOut: expectedOutStr,
+          expectedIn: expectedInStr
+        })
       });
+
+      if (!submitRes.ok) throw new Error('Failed to save gatepass');
 
       Alert.alert('Success', 'Gatepass requested successfully');
       navigation.goBack();
@@ -94,7 +129,7 @@ export default function GatepassForm({ navigation }) {
   };
 
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       <Text style={styles.title}>Apply for Gatepass</Text>
 
       <View style={styles.typeContainer}>
@@ -108,10 +143,7 @@ export default function GatepassForm({ navigation }) {
             ]} 
             onPress={() => setPassType(type)}
           >
-            <Text style={[
-              styles.typeBtnText, 
-              passType === type && styles.typeBtnTextActive
-            ]}>
+            <Text style={[styles.typeBtnText, passType === type && styles.typeBtnTextActive]}>
               {type === 'pre-approval' ? 'Pre-Approval' : type.charAt(0).toUpperCase() + type.slice(1)}
             </Text>
           </TouchableOpacity>
@@ -119,12 +151,55 @@ export default function GatepassForm({ navigation }) {
       </View>
       
       {passType === 'pre-approval' && (
-        <Text style={styles.helperText}>* This gatepass will be valid for tomorrow only.</Text>
+        <Text style={styles.helperText}>* Valid for tomorrow only.</Text>
       )}
       {passType === 'emergency' && (
-        <Text style={styles.helperTextEmergency}>* No warden approval needed. Wardens and parents will be notified immediately.</Text>
+        <Text style={styles.helperTextEmergency}>* No warden approval needed. Alerts sent immediately.</Text>
       )}
 
+      {/* --- STRUCTURED DATE & TIME PICKERS --- */}
+      <View style={styles.dateTimeCard}>
+        <Text style={styles.dateTimeHeader}>Departure Details</Text>
+        
+        <Text style={styles.label}>Out Date (Auto-filled)</Text>
+        <View style={styles.disabledBox}>
+          <Text style={styles.disabledText}>{formatDate(computedOutDate)}</Text>
+        </View>
+
+        <Text style={styles.label}>Expected Out Time</Text>
+        <TouchableOpacity style={styles.pickerBtn} onPress={() => openPicker('outTime', 'time')}>
+          <Text style={styles.pickerBtnText}>🕒 {formatTime(dateState.outTime)}</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.dateTimeCard}>
+        <Text style={styles.dateTimeHeader}>Return Details</Text>
+
+        <Text style={styles.label}>Expected Return Date</Text>
+        <TouchableOpacity style={styles.pickerBtn} onPress={() => openPicker('inDate', 'date')}>
+          <Text style={styles.pickerBtnText}>📅 {formatDate(dateState.inDate)}</Text>
+        </TouchableOpacity>
+
+        <Text style={styles.label}>Expected Return Time</Text>
+        <TouchableOpacity style={styles.pickerBtn} onPress={() => openPicker('inTime', 'time')}>
+          <Text style={styles.pickerBtnText}>🕒 {formatTime(dateState.inTime)}</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Renders the actual native pop-up when state is true */}
+      {showPicker && (
+        <DateTimePicker
+          value={dateState[activeField]}
+          mode={pickerMode}
+          is24Hour={false}
+          display="default"
+          onChange={handleDateConfirm}
+          minimumDate={computedOutDate} // Prevents picking a return date in the past
+        />
+      )}
+
+      {/* --- STANDARD TEXT INPUTS --- */}
+      <Text style={styles.sectionDivider}>Additional Details</Text>
       {['name', 'rollNo', 'roomNo', 'mobile', 'course', 'destination', 'reason', 'parentMobile'].map((field) => (
         <TextInput
           key={field}
@@ -135,23 +210,6 @@ export default function GatepassForm({ navigation }) {
           keyboardType={(field === 'mobile' || field === 'parentMobile') ? 'phone-pad' : 'default'}
         />
       ))}
-
-      {/* New Date/Time Inputs */}
-      <Text style={styles.label}>Expected Out Time (e.g., Today 5:00 PM)</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="When will you leave?"
-        value={form.expectedOut}
-        onChangeText={(val) => handleChange('expectedOut', val)}
-      />
-
-      <Text style={styles.label}>Expected Return Time (e.g., Today 8:00 PM)</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="When will you return?"
-        value={form.expectedIn}
-        onChangeText={(val) => handleChange('expectedIn', val)}
-      />
 
       <TouchableOpacity 
         style={[styles.submitBtn, passType === 'emergency' && styles.submitBtnEmergency]} 
@@ -165,19 +223,28 @@ export default function GatepassForm({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: '#fff' },
-  title: { fontSize: 22, fontWeight: 'bold', marginBottom: 15, marginTop: 10 },
+  container: { flex: 1, padding: 20, backgroundColor: '#f4f6f9' },
+  title: { fontSize: 22, fontWeight: 'bold', marginBottom: 15, marginTop: 10, color: '#333' },
   typeContainer: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
-  typeBtn: { flex: 1, paddingVertical: 10, borderWidth: 1, borderColor: '#ddd', borderRadius: 8, alignItems: 'center', marginHorizontal: 2, backgroundColor: '#f9f9f9' },
+  typeBtn: { flex: 1, paddingVertical: 10, borderWidth: 1, borderColor: '#ddd', borderRadius: 8, alignItems: 'center', marginHorizontal: 2, backgroundColor: '#fff' },
   typeBtnActive: { backgroundColor: '#007bff', borderColor: '#007bff' },
   typeBtnEmergency: { backgroundColor: '#dc3545', borderColor: '#dc3545' },
   typeBtnText: { color: '#555', fontWeight: 'bold', fontSize: 12 },
   typeBtnTextActive: { color: '#fff' },
   helperText: { fontSize: 12, color: '#007bff', marginBottom: 15, fontStyle: 'italic' },
   helperTextEmergency: { fontSize: 12, color: '#dc3545', marginBottom: 15, fontStyle: 'italic', fontWeight: 'bold' },
-  label: { fontSize: 14, fontWeight: 'bold', color: '#333', marginBottom: 5 },
-  input: { borderWidth: 1, borderColor: '#ddd', padding: 12, borderRadius: 8, marginBottom: 15, backgroundColor: '#f9f9f9', textTransform: 'capitalize' },
-  submitBtn: { backgroundColor: '#007bff', padding: 15, borderRadius: 8, alignItems: 'center', marginBottom: 40 },
+  
+  dateTimeCard: { backgroundColor: '#fff', padding: 15, borderRadius: 10, marginBottom: 15, elevation: 2, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4 },
+  dateTimeHeader: { fontSize: 16, fontWeight: 'bold', color: '#007bff', marginBottom: 10, borderBottomWidth: 1, borderBottomColor: '#eee', paddingBottom: 5 },
+  label: { fontSize: 13, fontWeight: '600', color: '#555', marginBottom: 5 },
+  disabledBox: { backgroundColor: '#e9ecef', padding: 12, borderRadius: 8, marginBottom: 15, borderWidth: 1, borderColor: '#ddd' },
+  disabledText: { color: '#6c757d', fontWeight: 'bold' },
+  pickerBtn: { backgroundColor: '#f8f9fa', padding: 12, borderRadius: 8, marginBottom: 15, borderWidth: 1, borderColor: '#ddd', alignItems: 'center' },
+  pickerBtnText: { color: '#333', fontSize: 15, fontWeight: 'bold' },
+  
+  sectionDivider: { fontSize: 18, fontWeight: 'bold', marginTop: 10, marginBottom: 15, color: '#333' },
+  input: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#ddd', padding: 12, borderRadius: 8, marginBottom: 15 },
+  submitBtn: { backgroundColor: '#007bff', padding: 15, borderRadius: 8, alignItems: 'center', marginBottom: 40, marginTop: 10 },
   submitBtnEmergency: { backgroundColor: '#dc3545' },
   submitBtnText: { color: '#fff', fontSize: 16, fontWeight: 'bold' }
 });
