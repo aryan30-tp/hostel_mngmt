@@ -1,20 +1,19 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, TextInput } from 'react-native';
 import { collection, query, where, onSnapshot, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 
 export default function SecurityView({ userData }) {
-  // NEW: Added a state to toggle between Active passes and History
   const [activeTab, setActiveTab] = useState('active'); 
   const [register, setRegister] = useState({ approved: [], out: [], history: [] });
+  const [searchQuery, setSearchQuery] = useState(''); // NEW
 
   useEffect(() => {
     if (!userData) return;
 
-    // UPDATED: Now also fetching 'in' status so we can populate the History tab
     const q = query(
       collection(db, 'gatepasses'),
-      where('status', 'in', ['approved', 'out', 'in'])
+      where('status', 'in', ['approved', 'out', 'in', 'emergency']) // Added emergency so security sees them
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -28,9 +27,10 @@ export default function SecurityView({ userData }) {
       allData.forEach(item => {
         if (item.status === 'out') {
           out.push(item);
-        } else if (item.status === 'approved') {
+        } else if (item.status === 'approved' || item.status === 'emergency') {
+          // Security should see emergencies instantly, and normal approved passes for today
           const passDate = item.date?.toDate().toDateString();
-          if (passDate === today) {
+          if (passDate === today || item.status === 'emergency') {
             approved.push(item);
           }
         } else if (item.status === 'in') {
@@ -38,7 +38,6 @@ export default function SecurityView({ userData }) {
         }
       });
 
-      // Sort the history so the most recently returned students are at the top
       history.sort((a, b) => (b.inTime || 0) - (a.inTime || 0));
 
       setRegister({ approved, out, history });
@@ -47,7 +46,6 @@ export default function SecurityView({ userData }) {
     return () => unsubscribe();
   }, [userData]);
 
-  // NEW: Saves the exact timestamp when the student leaves
   const markOut = async (id) => {
     try {
       await updateDoc(doc(db, 'gatepasses', id), { 
@@ -59,13 +57,11 @@ export default function SecurityView({ userData }) {
     }
   };
 
-  // NEW: Calculates the duration when they return and moves it to history
   const markIn = async (item) => {
     try {
       const inTime = Date.now();
       let durationStr = "Unknown";
 
-      // Calculate total time spent outside
       if (item.outTime) {
         const diffMs = inTime - item.outTime;
         const diffMins = Math.floor(diffMs / 60000);
@@ -94,6 +90,12 @@ export default function SecurityView({ userData }) {
     return new Date(timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   };
 
+  // NEW: Filter functions for the search bar
+  const filterByRollNo = (list) => {
+    if (!searchQuery) return list;
+    return list.filter(item => item.rollNo?.toLowerCase().includes(searchQuery.toLowerCase()));
+  };
+
   const renderActiveItem = ({ item }) => (
     <View style={[styles.card, item.status === 'out' && styles.cardOut]}>
       <View style={styles.row}>
@@ -102,12 +104,13 @@ export default function SecurityView({ userData }) {
       </View>
       <Text style={styles.detail}>Roll No: {item.rollNo}</Text>
       <Text style={styles.detail}>Going to: {item.destination}</Text>
+      <Text style={styles.expectedText}>Expected Out: {item.expectedOut} | In: {item.expectedIn}</Text>
       
       {item.status === 'out' && (
         <Text style={styles.timeTracker}>Left at: {formatTime(item.outTime)}</Text>
       )}
       
-      {item.status === 'approved' ? (
+      {['approved', 'emergency'].includes(item.status) ? (
         <TouchableOpacity style={[styles.btn, styles.outBtn]} onPress={() => markOut(item.id)}>
           <Text style={styles.btnText}>MARK OUT</Text>
         </TouchableOpacity>
@@ -127,7 +130,7 @@ export default function SecurityView({ userData }) {
           <Text style={styles.durationText}>{item.duration}</Text>
         </View>
       </View>
-      <Text style={styles.detail}>Room {item.roomNo} | {item.destination}</Text>
+      <Text style={styles.detail}>Roll No: {item.rollNo} | Room {item.roomNo}</Text>
       <View style={styles.timeBox}>
         <Text style={styles.timeLabel}>OUT: <Text style={styles.timeValue}>{formatDateTime(item.outTime)}</Text></Text>
         <Text style={styles.timeLabel}>IN: <Text style={styles.timeValue}>{formatDateTime(item.inTime)}</Text></Text>
@@ -137,8 +140,15 @@ export default function SecurityView({ userData }) {
 
   return (
     <View style={styles.container}>
-      
-      {/* Top Navigation Tabs */}
+      {/* NEW: Search Bar */}
+      <TextInput
+        style={styles.searchInput}
+        placeholder="Search by Roll Number..."
+        value={searchQuery}
+        onChangeText={setSearchQuery}
+        keyboardType="default"
+      />
+
       <View style={styles.tabContainer}>
         <TouchableOpacity 
           style={[styles.tab, activeTab === 'active' && styles.activeTab]} 
@@ -154,32 +164,32 @@ export default function SecurityView({ userData }) {
         </TouchableOpacity>
       </View>
 
-      {/* Render Active View OR History View based on selected tab */}
       {activeTab === 'active' ? (
         <View style={{ flex: 1 }}>
-          <Text style={styles.sectionTitle}>Currently Outside ({register.out.length})</Text>
+          <Text style={styles.sectionTitle}>Currently Outside ({filterByRollNo(register.out).length})</Text>
           <FlatList
-            data={register.out}
+            data={filterByRollNo(register.out)}
             keyExtractor={item => item.id}
             renderItem={renderActiveItem}
             ListEmptyComponent={<Text style={styles.emptyText}>No students currently out.</Text>}
             style={styles.list}
           />
 
-          <Text style={styles.sectionTitle}>Ready to Leave ({register.approved.length})</Text>
+          <Text style={styles.sectionTitle}>Ready to Leave ({filterByRollNo(register.approved).length})</Text>
           <FlatList
-            data={register.approved}
+            data={filterByRollNo(register.approved)}
             keyExtractor={item => item.id}
             renderItem={renderActiveItem}
-            ListEmptyComponent={<Text style={styles.emptyText}>No approved passes for today.</Text>}
+            ListEmptyComponent={<Text style={styles.emptyText}>No approved passes matching search.</Text>}
             style={styles.list}
           />
         </View>
       ) : (
         <View style={{ flex: 1 }}>
-          <Text style={styles.sectionTitle}>Completed Passes ({register.history.length})</Text>
+          {/* NEW: .slice(0, 20) ensures only the latest 20 show up */}
+          <Text style={styles.sectionTitle}>Completed Passes (Latest 20)</Text>
           <FlatList
-            data={register.history}
+            data={filterByRollNo(register.history).slice(0, 20)}
             keyExtractor={item => item.id}
             renderItem={renderHistoryItem}
             ListEmptyComponent={<Text style={styles.emptyText}>No history recorded yet.</Text>}
@@ -194,7 +204,8 @@ export default function SecurityView({ userData }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f4f6f9', padding: 10 },
   
-  // Tab Styles
+  searchInput: { backgroundColor: '#fff', padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#ddd', marginBottom: 15, fontSize: 16 },
+
   tabContainer: { flexDirection: 'row', backgroundColor: '#e9ecef', borderRadius: 8, padding: 4, marginBottom: 15 },
   tab: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 6 },
   activeTab: { backgroundColor: '#fff', elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2 },
@@ -205,23 +216,21 @@ const styles = StyleSheet.create({
   list: { flex: 1 },
   emptyText: { fontStyle: 'italic', color: '#666', marginBottom: 15, textAlign: 'center' },
   
-  // Card Styles
   card: { backgroundColor: '#fff', padding: 15, borderRadius: 8, marginBottom: 10, elevation: 2, borderLeftWidth: 4, borderLeftColor: '#343a40' },
   cardOut: { borderLeftColor: '#fd7e14' }, 
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 },
   name: { fontSize: 16, fontWeight: 'bold', color: '#333' },
   room: { fontSize: 14, color: '#007bff', fontWeight: 'bold' },
   detail: { fontSize: 14, color: '#555', marginBottom: 4 },
+  expectedText: { fontSize: 12, color: '#17a2b8', fontStyle: 'italic', marginBottom: 4 },
   timeTracker: { fontSize: 14, fontWeight: 'bold', color: '#fd7e14', marginVertical: 5 },
   
-  // History Specific Styles
   durationBadge: { backgroundColor: '#e9ecef', paddingVertical: 4, paddingHorizontal: 10, borderRadius: 20 },
   durationText: { fontSize: 12, fontWeight: 'bold', color: '#495057' },
   timeBox: { backgroundColor: '#f8f9fa', padding: 10, borderRadius: 8, marginTop: 10 },
   timeLabel: { fontSize: 13, color: '#666', marginBottom: 4 },
   timeValue: { color: '#333', fontWeight: 'bold' },
 
-  // Buttons
   btn: { paddingVertical: 10, borderRadius: 5, alignItems: 'center', marginTop: 10 },
   outBtn: { backgroundColor: '#ff9800' },
   inBtn: { backgroundColor: '#28a745' },

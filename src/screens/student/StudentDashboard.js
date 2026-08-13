@@ -1,6 +1,6 @@
 import React, { useContext, useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert } from 'react-native';
-import { collection, query, where, onSnapshot, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { signOut } from 'firebase/auth';
 import { auth, db } from '../../config/firebase';
 import { AuthContext } from '../../context/AuthContext';
@@ -59,6 +59,24 @@ export default function StudentDashboard({ navigation }) {
     }
   };
 
+  const handleDeleteGatepass = (gatepassId) => {
+    Alert.alert('Delete Gatepass', 'Are you sure you want to delete this gatepass request?', [
+      { text: 'Cancel', style: 'cancel' },
+      { 
+        text: 'Delete', 
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await deleteDoc(doc(db, 'gatepasses', gatepassId));
+            Alert.alert('Success', 'Gatepass deleted.');
+          } catch (error) {
+            Alert.alert('Error', 'Failed to delete gatepass.');
+          }
+        }
+      }
+    ]);
+  };
+
   const handleLogout = async () => {
     await signOut(auth);
   };
@@ -88,8 +106,17 @@ export default function StudentDashboard({ navigation }) {
         ListEmptyComponent={<Text style={styles.emptyText}>No active gatepasses.</Text>}
         renderItem={({ item }) => (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>To: {item.destination}</Text>
+            <View style={styles.cardHeaderRow}>
+              <Text style={styles.cardTitle}>To: {item.destination}</Text>
+              {/* Delete button only shown if the student hasn't left yet */}
+              {['pending', 'approved', 'emergency'].includes(item.status) && (
+                <TouchableOpacity onPress={() => handleDeleteGatepass(item.id)}>
+                  <Text style={styles.deleteText}>Delete 🗑️</Text>
+                </TouchableOpacity>
+              )}
+            </View>
             <Text>Status: <Text style={{ fontWeight: 'bold' }}>{item.status.toUpperCase()}</Text></Text>
+            <Text style={styles.expectedText}>Out: {item.expectedOut} | In: {item.expectedIn}</Text>
             {item.status === 'approved' && (
               <Text style={styles.helperText}>Show this to the guard when leaving.</Text>
             )}
@@ -134,9 +161,12 @@ const styles = StyleSheet.create({
   actionBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
   sectionTitle: { fontSize: 18, fontWeight: 'bold', marginVertical: 10, color: '#333' },
   card: { backgroundColor: '#fff', padding: 15, borderRadius: 8, marginBottom: 10, elevation: 2 },
-  cardTitle: { fontSize: 16, fontWeight: 'bold', marginBottom: 5 },
+  cardHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 },
+  cardTitle: { fontSize: 16, fontWeight: 'bold' },
+  deleteText: { color: '#dc3545', fontWeight: 'bold', fontSize: 14 },
   emptyText: { fontStyle: 'italic', color: '#666', marginBottom: 10 },
   helperText: { color: 'green', marginTop: 5, fontSize: 12 },
+  expectedText: { color: '#6c757d', fontSize: 12, marginTop: 5 },
   statusText: { marginTop: 5, color: '#e68a00', fontWeight: '600' },
   resolveBtn: { backgroundColor: '#28a745', padding: 10, borderRadius: 5, marginTop: 10, alignItems: 'center' },
   resolveBtnText: { color: '#fff', fontWeight: 'bold' }
